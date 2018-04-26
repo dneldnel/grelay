@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"strings"
 	"tool"
 
 	"github.com/tidwall/gjson"
@@ -19,6 +18,13 @@ var pool *string
 var poolDefault = "asia1.bsod.pw:3833"
 
 var logger = &tool.Logger{Level: 4}
+
+var authid int64 = 0
+var extranonceid int64
+var subscribeid int64
+var user = ""
+var pass = ""
+var worker = ""
 
 var j interface{}
 
@@ -74,6 +80,9 @@ func handle(miner *net.TCPConn) {
 
 		// io.CopyBuffer(pool, miner, buf)
 
+		var m = new(tool.Manager)
+		m.InitiateLogger(4)
+
 		// 构建reader和writer
 		poolWriter := bufio.NewWriter(pool)
 		minerReader := bufio.NewReader(miner)
@@ -88,7 +97,7 @@ func handle(miner *net.TCPConn) {
 			//log.Printf("Miner -> %s \n", string(b))
 
 			//processMinerMessage(b)
-			processMessage(b)
+			m.ProcessMinerMsg(b)
 
 			poolWriter.Write(b)
 			poolWriter.Write([]byte("\n"))
@@ -112,8 +121,8 @@ func handle(miner *net.TCPConn) {
 
 		//log.Printf("pool -> %s \n", string(b))
 
-		//processpoolMessage(b)
-		processMessage(b)
+		processPoolMessage(b)
+		//processMessage(b)
 
 		minerWriter.Write(b)
 		minerWriter.Write([]byte("\n"))
@@ -124,103 +133,100 @@ func handle(miner *net.TCPConn) {
 
 }
 
-func processpoolMessage(ret []byte) {
-	str := string(ret)
+func processPoolMessage(ret []byte) {
+
 	//println(str)
-	// id := gjson.GetBytes(ret, "id")
-	setDiff := strings.Contains(str, "mining.set_difficulty")
-	miningNotify := strings.Contains(str, "mining.notify")
+	hasSetDiff := bytes.Contains(ret, []byte("mining.set_difficulty"))
+	hasMiningNotify := bytes.Contains(ret, []byte("mining.notify"))
+	hasMethod := bytes.Contains(ret, []byte("method"))
+	hasResult := bytes.Contains(ret, []byte("result"))
+	hasParams := bytes.Contains(ret, []byte("params"))
+	hasExtranonce := bytes.Contains(ret, []byte("mining.extranonce.subscribe"))
 
-	if setDiff {
-		log.Printf("pool  --> Set Diff")
-		return
-	} else if miningNotify {
-		log.Printf("pool  --> Mining notify")
-		return
-	}
-
+	id := gjson.GetBytes(ret, "id").Int()
 	result := gjson.GetBytes(ret, "result")
 
-	if result.Exists() {
-		rets := result.String()
-
+	//{"id":1,"result":[[["mining.set_difficulty","1"],["mining.notify","7d7806ce0fe1d84d46bc7c164a169f2a"]],"8100f103",4],"error":null}
+	if id == subscribeid && hasResult && hasSetDiff && hasMiningNotify {
+		logger.Debug("Pool Raw: " + string(ret))
+		logger.Info("Pool  --> Subscribe OK ")
+		subscribeid = 0
+	} else if hasMethod && hasParams && hasSetDiff {
+		diff := gjson.GetBytes(ret, "params").String()
+		logger.Debug("Pool Raw: " + string(ret))
+		logger.Info("Pool  --> Setting diff" + diff)
+	} else if hasMethod && hasParams && hasMiningNotify {
+		//python版本在此增加clean_job
+		logger.Debug("Pool Raw: " + string(ret))
+		logger.Info("Pool  --> Mining Notify ")
+	} else if hasMethod && hasExtranonce {
+		logger.Debug("Pool Raw: " + string(ret))
+		logger.Info("Pool  --> extranonce subscribe ok")
+	} else if result.Bool() {
 		error := gjson.GetBytes(ret, "error").String()
-		if rets == "true" && error == "" {
-			log.Printf("pool  --> Share Accepted")
-		} else if rets == "false" && error != "" {
-			log.Printf("pool  --> Share Rejected with %s", error)
-		} else {
-			println("pool  -->%s", str)
-		}
 
+		if id == authid && error == "" {
+			logger.Debug("Pool Raw: " + string(ret))
+			logger.Info("Pool  --> Worker authorised")
+			authid = 0
+		} else if id == extranonceid && error == "" {
+			logger.Debug("Pool Raw: " + string(ret))
+			logger.Info("Pool  --> Extranonce subscirbed OK.")
+			extranonceid = 0
+		} else if error == "" {
+			logger.Debug("Pool Raw: " + string(ret))
+			logger.Info("Pool  --> Share accepted")
+		} else {
+			logger.Warning("Pool WTF result=true Raw: " + string(ret))
+		}
+	} else if !result.Bool() {
+		error := gjson.GetBytes(ret, "error").String()
+		logger.Debug("Pool Raw: " + string(ret))
+		logger.Info("Pool  --> Share rejected with error: " + error)
 	} else {
-		log.Printf("pool WTF --> %s \n", string(ret))
+		logger.Warning("Pool WTF Raw: " + string(ret))
 	}
+
 }
 
 func processMinerMessage(ret []byte) {
-	id := gjson.GetBytes(ret, "id")
-	str := string(ret)
 
-	if id.String() == "" {
-		log.Printf("Unknown miner command: %s", string(ret))
-		return
-	}
+	hasMethod := bytes.Contains(ret, []byte("method"))
+	//hasResult := bytes.Contains(ret, []byte("result"))
+	hasParams := bytes.Contains(ret, []byte("params"))
+	//hasExtranonce := bytes.Contains(ret, []byte("mining.extranonce.subscribe"))
+	//hasAuthorize := bytes.Contains(ret, []byte("mining.authorize"))
 
-	if id.Int() == 1 { // mining.subscribe
-		log.Print("MINER --> sending subscribe request")
-	} else if id.Int() == 2 { //mining.authorize
-
-		if strings.Contains(str, "params") && strings.Contains(str, "=") {
-			t := gjson.GetBytes(ret, "params.0").String()
-
-			s := strings.Split(t, "=")
-			u := strings.Split(s[0], ".")
-			if len(u) > 1 {
-				user := u[0]
-				worker := u[1]
-				log.Printf("Found user %s, worker %s", user, worker)
-			} else {
-				log.Printf("Found user %s, no worker found", u[0])
-			}
-
-		}
-
-	} else if id.Int() > 2 {
-		if strings.Contains(str, "mining.submit") { // mining.submit
-			g := gjson.GetBytes(ret, "params.0").String()
-			log.Printf("Miner --> submit share id %d by %s", id.Int(), g)
-		}
-
-	} else {
-		log.Printf("Miner --> %s \n", string(ret))
-	}
-
-}
-
-func processMessage(ret []byte) {
-	//var output string = ""
-	var authid int64 = 0
-
-	if bytes.Contains(ret, []byte("method")) {
+	//{"id": 3, "method": "mining.extranonce.subscribe", "params": []}
+	//{"method": "mining.submit", "params": ["bFQrErYrzHjgLyFcjeCCpg4GJwMcov3Te7.aaa", "1417", "00000000", "5ae14ad9", "49b81d16"], "id":10}
+	//{"id": 3, "method": "mining.extranonce.subscribe", "params": []}
+	if hasMethod && hasParams {
 		// logger.Debug("got method: " + gjson.GetBytes(ret, "method").String())
 
 		method := gjson.GetBytes(ret, "method")
 		param := gjson.GetBytes(ret, "params")
+		id := gjson.GetBytes(ret, "id").Int()
 
 		if method.String() == "mining.subscribe" { //usually id=1 from miner
-			mv := gjson.GetBytes(ret, "params").String()
-			logger.Info("Miner subscribe with params:" + mv)
-		} else if method.String() == "mining.authorize" && param.Exists() {
-			user := param.Array()[0]
-			pass := param.Array()[1]
 
-			authid = gjson.GetBytes(ret, "id").Int()
-			logger.Info(fmt.Sprintf("Got user: %s/%s id=%d", user.String(), pass.String(), authid))
+			logger.Info("Miner --> Initiate subscription with params:" + param.String())
+			subscribeid = id
+		} else if method.String() == "mining.authorize" && param.Exists() {
+			user = param.Array()[0].String()
+			pass = param.Array()[1].String()
+			authid = id
+			logger.Info(fmt.Sprintf("Miner --> User: %s/%s id=%d", user, pass, authid))
+		} else if method.String() == "mining.extranonce.subscribe" {
+			extranonceid = id
+			logger.Debug("Miner --> " + string(ret))
+			logger.Info("Miner --> Subscribe extranonce")
+		} else if method.String() == "mining.submit" && param.Exists() {
+			logger.Debug("Miner --> " + string(ret))
+			logger.Info(fmt.Sprintf("Miner --> Submit result id %d by %s", id, user))
 		} else {
-			logger.Debug(string(ret))
+			logger.Info(string(ret))
 		}
 	} else {
-		logger.Debug(string(ret))
+		logger.Info(string(ret))
 	}
 }
