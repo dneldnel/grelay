@@ -158,12 +158,14 @@ func processPoolMessage(ret []byte) []byte {
 		subscribeid = 0
 	} else if hasMethod && hasParams && hasSetDiff {
 		logger.Debug("Pool Raw: " + string(ret))
-		newdiff := []byte("[" + *diff + "]")
-		diff := gjson.GetBytes(ret, "params").String()
-		ret = bytes.Replace(ret, []byte(diff), newdiff, 1)
+		// newdiff := []byte("[" + *diff + "]")
 
-		logger.Debug("Pool  --> Diff changed to:" + string(ret))
-		logger.Info("Pool  --> Setting diff" + string(diff))
+		diffOrig := gjson.GetBytes(ret, "params").String()
+
+		// ret = bytes.Replace(ret, []byte(diffOrig), newdiff, 1)
+
+		logger.Info("Pool  --> Setting diff" + string(diffOrig))
+
 	} else if hasMethod && hasParams && hasMiningNotify {
 		//python版本在此增加clean_job
 		logger.Debug("Pool Raw: " + string(ret))
@@ -223,8 +225,26 @@ func processMinerMessage(ret []byte) []byte {
 			logger.Info("Miner --> Initiate subscription with params:" + param.String())
 
 		} else if method.String() == "mining.authorize" && param.Exists() {
+			logger.Debug("Miner Raw--> " + string(ret))
+
 			user = param.Array()[0].String()
-			pass = param.Array()[1].String()
+			pass = param.Array()[1].String() //"d=20" / "sd=20"
+
+			//Analyze pass
+			b := bytes.Split([]byte(pass), []byte("="))
+
+			//could be x in the pass field
+			if len(b) != 2 {
+
+			}
+
+			passNew := []byte("d=24")
+			ret = bytes.Replace(ret, []byte(pass), passNew, -1)
+
+			logger.Debug("Miner --> Diff adjusted:" + string(ret))
+
+			//fmt.Printf("%q\n", b)
+
 			authid = id
 			logger.Info(fmt.Sprintf("Miner --> User: %s/%s id=%d", user, pass, authid))
 		} else if method.String() == "mining.extranonce.subscribe" {
