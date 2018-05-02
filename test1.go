@@ -16,6 +16,8 @@ var listeningOn *string
 var listeningOnDefault = "33333"
 var pool *string
 var poolDefault = "asia1.bsod.pw:3833"
+var diff *string
+var diffDefault = "50"
 
 var logger = &tool.Logger{Level: 4}
 
@@ -34,8 +36,11 @@ func main() {
 
 	pool = flag.String("pool", poolDefault, "Input pool address:port")
 	listeningOn = flag.String("listen", listeningOnDefault, "Input listen port")
+	diff = flag.String("diff", diffDefault, "Mining difficult")
+
+	flag.Parse()
 	//runtime.GOMAXPROCS(1)
-	logger.Info(fmt.Sprintf("Pool: %s, listen on %s", *pool, *listeningOn))
+	logger.Info(fmt.Sprintf("Pool: %s, diff:%s, listen on %s", *pool, *diff, *listeningOn))
 
 	listener, err := net.Listen("tcp", "0.0.0.0:"+*listeningOn)
 	checkError(err)
@@ -81,7 +86,7 @@ func handle(miner *net.TCPConn) {
 		// io.CopyBuffer(pool, miner, buf)
 
 		var m = new(tool.Manager)
-		m.InitiateLogger(4)
+		m.InitiateLogger(5)
 
 		// 构建reader和writer
 		poolWriter := bufio.NewWriter(pool)
@@ -96,8 +101,8 @@ func handle(miner *net.TCPConn) {
 
 			//log.Printf("Miner -> %s \n", string(b))
 
-			//processMinerMessage(b)
-			m.ProcessMinerMsg(b)
+			b = processMinerMessage(b)
+			//m.ProcessMinerMsg(b)
 
 			poolWriter.Write(b)
 			poolWriter.Write([]byte("\n"))
@@ -121,7 +126,7 @@ func handle(miner *net.TCPConn) {
 
 		//log.Printf("pool -> %s \n", string(b))
 
-		processPoolMessage(b)
+		b = processPoolMessage(b)
 		//processMessage(b)
 
 		minerWriter.Write(b)
@@ -133,7 +138,7 @@ func handle(miner *net.TCPConn) {
 
 }
 
-func processPoolMessage(ret []byte) {
+func processPoolMessage(ret []byte) []byte {
 
 	//println(str)
 	hasSetDiff := bytes.Contains(ret, []byte("mining.set_difficulty"))
@@ -152,9 +157,13 @@ func processPoolMessage(ret []byte) {
 		logger.Info("Pool  --> Subscribe OK ")
 		subscribeid = 0
 	} else if hasMethod && hasParams && hasSetDiff {
-		diff := gjson.GetBytes(ret, "params").String()
 		logger.Debug("Pool Raw: " + string(ret))
-		logger.Info("Pool  --> Setting diff" + diff)
+		newdiff := []byte("[" + *diff + "]")
+		diff := gjson.GetBytes(ret, "params").String()
+		ret = bytes.Replace(ret, []byte(diff), newdiff, 1)
+
+		logger.Debug("Pool  --> Diff changed to:" + string(ret))
+		logger.Info("Pool  --> Setting diff" + string(diff))
 	} else if hasMethod && hasParams && hasMiningNotify {
 		//python版本在此增加clean_job
 		logger.Debug("Pool Raw: " + string(ret))
@@ -171,7 +180,7 @@ func processPoolMessage(ret []byte) {
 			authid = 0
 		} else if id == extranonceid && error == "" {
 			logger.Debug("Pool Raw: " + string(ret))
-			logger.Info("Pool  --> Extranonce subscirbed OK.")
+			logger.Info("Pool  --> Extranonce subscription OK.")
 			extranonceid = 0
 		} else if error == "" {
 			logger.Debug("Pool Raw: " + string(ret))
@@ -187,15 +196,15 @@ func processPoolMessage(ret []byte) {
 		logger.Warning("Pool WTF Raw: " + string(ret))
 	}
 
+	return ret
+
 }
 
-func processMinerMessage(ret []byte) {
+func processMinerMessage(ret []byte) []byte {
 
 	hasMethod := bytes.Contains(ret, []byte("method"))
 	//hasResult := bytes.Contains(ret, []byte("result"))
 	hasParams := bytes.Contains(ret, []byte("params"))
-	//hasExtranonce := bytes.Contains(ret, []byte("mining.extranonce.subscribe"))
-	//hasAuthorize := bytes.Contains(ret, []byte("mining.authorize"))
 
 	//{"id": 3, "method": "mining.extranonce.subscribe", "params": []}
 	//{"method": "mining.submit", "params": ["bFQrErYrzHjgLyFcjeCCpg4GJwMcov3Te7.aaa", "1417", "00000000", "5ae14ad9", "49b81d16"], "id":10}
@@ -208,9 +217,11 @@ func processMinerMessage(ret []byte) {
 		id := gjson.GetBytes(ret, "id").Int()
 
 		if method.String() == "mining.subscribe" { //usually id=1 from miner
-
-			logger.Info("Miner --> Initiate subscription with params:" + param.String())
 			subscribeid = id
+			logger.Debug("Miner Raw--> " + string(ret))
+			logger.Debug("Miner subscribeid = " + string(subscribeid))
+			logger.Info("Miner --> Initiate subscription with params:" + param.String())
+
 		} else if method.String() == "mining.authorize" && param.Exists() {
 			user = param.Array()[0].String()
 			pass = param.Array()[1].String()
@@ -229,4 +240,5 @@ func processMinerMessage(ret []byte) {
 	} else {
 		logger.Info(string(ret))
 	}
+	return ret
 }
