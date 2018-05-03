@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strconv"
 	"tool"
 
 	"github.com/tidwall/gjson"
@@ -71,6 +72,9 @@ func handle(miner *net.TCPConn) {
 
 	defer miner.Close()
 
+	var m = new(tool.Manager)
+	m.InitiateLogger(4)
+
 	logger.Info("Connectiing " + *pool)
 	pool, err := net.Dial("tcp", *pool)
 	checkError(err)
@@ -85,9 +89,6 @@ func handle(miner *net.TCPConn) {
 
 		// io.CopyBuffer(pool, miner, buf)
 
-		var m = new(tool.Manager)
-		m.InitiateLogger(5)
-
 		// 构建reader和writer
 		poolWriter := bufio.NewWriter(pool)
 		minerReader := bufio.NewReader(miner)
@@ -101,8 +102,8 @@ func handle(miner *net.TCPConn) {
 
 			//log.Printf("Miner -> %s \n", string(b))
 
-			b = processMinerMessage(b)
-			//m.ProcessMinerMsg(b)
+			//b = processMinerMessage(b)
+			b = m.ProcessMinerMessage(b, diff)
 
 			poolWriter.Write(b)
 			poolWriter.Write([]byte("\n"))
@@ -126,9 +127,8 @@ func handle(miner *net.TCPConn) {
 
 		//log.Printf("pool -> %s \n", string(b))
 
-		b = processPoolMessage(b)
-		//processMessage(b)
-
+		//b = processPoolMessage(b)
+		b = m.ProcessPoolMessage(b)
 		minerWriter.Write(b)
 		minerWriter.Write([]byte("\n"))
 		minerWriter.Flush()
@@ -227,26 +227,33 @@ func processMinerMessage(ret []byte) []byte {
 		} else if method.String() == "mining.authorize" && param.Exists() {
 			logger.Debug("Miner Raw--> " + string(ret))
 
-			user = param.Array()[0].String()
-			pass = param.Array()[1].String() //"d=20" / "sd=20"
-
-			//Analyze pass
-			b := bytes.Split([]byte(pass), []byte("="))
-
-			//could be x in the pass field
-			if len(b) != 2 {
-
-			}
-
-			passNew := []byte("d=24")
-			ret = bytes.Replace(ret, []byte(pass), passNew, -1)
-
-			logger.Debug("Miner --> Diff adjusted:" + string(ret))
-
-			//fmt.Printf("%q\n", b)
-
 			authid = id
-			logger.Info(fmt.Sprintf("Miner --> User: %s/%s id=%d", user, pass, authid))
+
+			user = param.Array()[0].String()
+			pass = param.Array()[1].String() //"d=20" / "sd=20" /"x"
+
+			_, err := strconv.ParseFloat(*diff, 32)
+
+			if err == nil {
+				//Analyze pass
+				b := bytes.Split([]byte(pass), []byte("="))
+
+				//could be x in the pass field
+				if len(b) != 2 {
+
+				}
+
+				passNew := []byte("d=" + *diff)
+				ret = bytes.Replace(ret, []byte(pass), passNew, -1)
+
+				logger.Debug("Miner --> Diff adjusted:" + string(ret))
+
+				logger.Info(fmt.Sprintf("Miner --> User: %s/%s id=%d", user, passNew, authid))
+			} else {
+				//fmt.Printf("%q\n", b)
+
+				logger.Info(fmt.Sprintf("Miner --> User: %s/%s id=%d", user, pass, authid))
+			}
 		} else if method.String() == "mining.extranonce.subscribe" {
 			extranonceid = id
 			logger.Debug("Miner --> " + string(ret))
