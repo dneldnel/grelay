@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"strconv"
+	"time"
 	"tool"
 
 	"github.com/tidwall/gjson"
@@ -68,21 +69,25 @@ func checkError(err error) int {
 
 func handle(miner *net.TCPConn) {
 
-	defer log.Println("Going to close conn", miner.RemoteAddr().String())
-
-	defer miner.Close()
-
 	var m = new(tool.Manager)
 	m.InitiateLogger(4)
 
 	logger.Info("Connectiing " + *pool)
 	pool, err := net.Dial("tcp", *pool)
 	checkError(err)
-	defer pool.Close()
+
+	defer func() {
+		log.Println("Going to close conn", miner.RemoteAddr().String())
+		miner.Close()
+		pool.Close()
+	}()
+
 	go func() {
-		defer log.Println("Going to close miner conn", miner.RemoteAddr().String())
-		defer miner.Close()
-		defer pool.Close()
+		defer func() {
+			log.Println("Going to close miner conn", miner.RemoteAddr().String())
+			miner.Close()
+			pool.Close()
+		}()
 
 		// buf := make([]byte, 1024)
 		// //log.Println(buf)
@@ -119,6 +124,7 @@ func handle(miner *net.TCPConn) {
 	minerWriter := bufio.NewWriter(miner)
 
 	for {
+		pool.SetReadDeadline(time.Now().Add(time.Minute * 3))
 		// 读取一行数据, 以"\n"结尾
 		b, _, err := poolReader.ReadLine()
 		if err != nil {
