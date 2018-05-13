@@ -99,6 +99,7 @@ func handle(miner *net.TCPConn) {
 		minerReader := bufio.NewReader(miner)
 
 		for {
+			miner.SetReadDeadline(time.Now().Add(time.Minute * 3))
 			// 读取一行数据, 以"\n"结尾
 			b, _, err := minerReader.ReadLine()
 			if err != nil {
